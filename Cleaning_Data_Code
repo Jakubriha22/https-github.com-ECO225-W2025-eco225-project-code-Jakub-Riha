@@ -1,0 +1,384 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "ca945fed-be20-4a66-9ce8-ca812f2dd4fa",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import pandas as pd\n",
+    "import numpy as np\n",
+    "import statsmodels.api as sm\n",
+    "import matplotlib.pyplot as plt\n",
+    "import seaborn as sns"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "5ea69700-900e-44f9-a226-7adfd5e690f6",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# File Paths\n",
+    "data_path = \"/Users/jakubriha/Desktop/ECO225/Project/Data/\"\n",
+    "loans_file = data_path + \"loans.csv\"\n",
+    "kiva_loans_file = data_path + \"kiva_loans.csv\"\n",
+    "country_stats_file = data_path + \"country_stats.csv\"\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "ff4d8619-bd0c-4576-832c-0d0a87613a72",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Merged dataset size: 671204\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Load Data\n",
+    "df1 = pd.read_csv(loans_file)\n",
+    "df2 = pd.read_csv(kiva_loans_file).rename(columns={'id': 'loan_id'})\n",
+    "\n",
+    "# Merge datasets on loan_id\n",
+    "merged_df = df1.merge(df2, on='loan_id', how='inner')\n",
+    "print(f\"Merged dataset size: {merged_df.shape[0]}\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "bff5d05c-9e4f-4274-ac12-11fdd454a5c3",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Filtered dataset size: 654651\n",
+      "funded_amount: False\n",
+      "loan_amount: False\n",
+      "country_code: False\n",
+      "currency: False\n",
+      "partner_id: False\n",
+      "posted_time: False\n",
+      "tags: False\n",
+      "borrower_genders: False\n",
+      "repayment_interval: False\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Drop rows with missing values in key columns\n",
+    "required_columns = ['funded_amount_x', 'loan_amount_x', 'country_code_x', 'borrower_genders_x']\n",
+    "filtered_df = merged_df.dropna(subset=required_columns).copy()\n",
+    "print(f\"Filtered dataset size: {filtered_df.shape[0]}\")\n",
+    "\n",
+    "# Check for differences between duplicated columns\n",
+    "columns_to_check = ['funded_amount', 'loan_amount', 'country_code', 'currency', 'partner_id',\n",
+    "                    'posted_time', 'tags', 'borrower_genders', 'repayment_interval']\n",
+    "for col in columns_to_check:\n",
+    "    print(f\"{col}: {filtered_df[f'{col}_x'].equals(filtered_df[f'{col}_y'])}\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "d054f061-8915-43ef-8f59-891d96ae0a86",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Remove discrepancies in categorical columns\n",
+    "filtered_df = filtered_df[\n",
+    "    (filtered_df['country_code_x'] == filtered_df['country_code_y']) &\n",
+    "    (filtered_df['currency_x'] == filtered_df['currency_y']) &\n",
+    "    (filtered_df['borrower_genders_x'] == filtered_df['borrower_genders_y']) &\n",
+    "    (filtered_df['repayment_interval_x'] == filtered_df['repayment_interval_y'])\n",
+    "]\n",
+    "\n",
+    "# Keep only one version of duplicated columns\n",
+    "rename_cols = {f'{col}_x': col for col in columns_to_check}\n",
+    "filtered_df = filtered_df.rename(columns=rename_cols).drop(columns=[f'{col}_y' for col in columns_to_check])\n",
+    "\n",
+    "# Drop unnecessary columns\n",
+    "filtered_df.drop(columns=['partner_id', 'tags', 'num_lenders_total', 'country'], inplace=True)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "ffbe7142-8894-476f-8fa4-0b5e98351495",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "gni           17039\n",
+      "population       19\n",
+      "hdi             159\n",
+      "dtype: int64\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Compute funded percentage and remove overfunded loans\n",
+    "filtered_df['funded_percentage'] = filtered_df['funded_amount'] / filtered_df['loan_amount']\n",
+    "filtered_df = filtered_df[filtered_df['funded_percentage'] <= 1]\n",
+    "\n",
+    "# Merge with country stats\n",
+    "df_country = pd.read_csv(country_stats_file, usecols=['country_code', 'gni', 'population', 'hdi'])\n",
+    "final_df = filtered_df.merge(df_country, on='country_code', how='left')\n",
+    "print(final_df[['gni', 'population', 'hdi']].isna().sum())\n",
+    "\n",
+    "# Encode gender as a dummy variable\n",
+    "final_df['gender_dummy'] = final_df['borrower_genders'].str.contains('female', case=False, na=False).astype(int)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "id": "c84fba92-e793-4bf5-a79e-ecf61378f12e",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Index(['loan_id', 'loan_name', 'original_language', 'description',\n",
+       "       'description_translated', 'funded_amount', 'loan_amount', 'status',\n",
+       "       'activity_name', 'sector_name', 'loan_use', 'country_code',\n",
+       "       'country_name', 'town_name', 'currency_policy',\n",
+       "       'currency_exchange_coverage_rate', 'currency', 'posted_time',\n",
+       "       'planned_expiration_time', 'disburse_time', 'raised_time',\n",
+       "       'lender_term', 'num_journal_entries', 'num_bulk_entries',\n",
+       "       'borrower_genders', 'borrower_pictured', 'repayment_interval',\n",
+       "       'distribution_model', 'activity', 'sector', 'use', 'region',\n",
+       "       'disbursed_time', 'funded_time', 'term_in_months', 'lender_count',\n",
+       "       'date', 'funded_percentage', 'population', 'hdi', 'gni',\n",
+       "       'gender_dummy'],\n",
+       "      dtype='object')"
+      ]
+     },
+     "execution_count": 14,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "final_df.columns"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "b34b7cd0-1c64-46ac-a723-54611cd40278",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Drop empty observations for HDI\n",
+    "final_df = final_df.dropna(subset=['hdi']) \n",
+    "\n",
+    "# Drop duplicate variables \n",
+    "final_df = final_df.drop(columns=['activity', 'sector', 'use',])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "id": "8a63ed21-66d0-4a05-b24e-6c14e3dffe37",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Index(['loan_id', 'loan_name', 'original_language', 'description',\n",
+       "       'description_translated', 'funded_amount', 'loan_amount', 'status',\n",
+       "       'activity_name', 'sector_name', 'loan_use', 'country_code',\n",
+       "       'country_name', 'town_name', 'posted_time', 'planned_expiration_time',\n",
+       "       'disburse_time', 'raised_time', 'lender_term', 'borrower_genders',\n",
+       "       'borrower_pictured', 'repayment_interval', 'disbursed_time',\n",
+       "       'funded_time', 'term_in_months', 'lender_count', 'date',\n",
+       "       'funded_percentage', 'population', 'hdi', 'gni', 'gender_dummy'],\n",
+       "      dtype='object')"
+      ]
+     },
+     "execution_count": 26,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# Drop duplicate variables \n",
+    "final_df = final_df.drop(columns=['currency_policy', 'currency_exchange_coverage_rate', 'currency', 'num_journal_entries',\n",
+    "                                  'num_bulk_entries', 'distribution_model', 'region', ])\n",
+    "\n",
+    "# Display the columns\n",
+    "final_df.columns"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 28,
+   "id": "8e63290d-398d-4c25-ba6a-52150a05bf2e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Calculate funding time in days\n",
+    "final_df['posted_time'] = pd.to_datetime(final_df['posted_time'])\n",
+    "final_df['raised_time'] = pd.to_datetime(final_df['raised_time'])\n",
+    "final_df['funding_time_days'] = (final_df['raised_time'] - final_df['posted_time']).dt.total_seconds() / (60 * 60 * 24)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 30,
+   "id": "158752bd-1270-448b-b376-bbf68a2e61c1",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "final_df = final_df[final_df['funding_time_days'] > 0]  # Ensure no non-positive values\n",
+    "final_df['log_funding_time'] = np.log(final_df['funding_time_days'])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 34,
+   "id": "554339e7-8197-47f7-81b2-86d362f6ee9b",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "   loan_id       loan_name original_language  \\\n",
+      "0   657307            Aivy           English   \n",
+      "1   657259  Idalia Marizza           Spanish   \n",
+      "2   658010           Aasia           English   \n",
+      "3   659347         Gulmira           Russian   \n",
+      "4   656933         Ricky\\t           English   \n",
+      "\n",
+      "                                         description  \\\n",
+      "0  Aivy, 21 years of age, is single and lives in ...   \n",
+      "1  Doña Idalia, esta casada, tiene 57 años de eda...   \n",
+      "2  Aasia is a 45-year-old married lady and she ha...   \n",
+      "3  Гулмире 36 лет, замужем, вместе с супругом вос...   \n",
+      "4  Ricky is a farmer who currently cultivates his...   \n",
+      "\n",
+      "                              description_translated  funded_amount  \\\n",
+      "0                                                NaN          125.0   \n",
+      "1  Idalia, 57, is married and lives with her husb...          400.0   \n",
+      "2                                                NaN          400.0   \n",
+      "3  Gulmira is 36 years old and married.  She and ...          625.0   \n",
+      "4                                                NaN          425.0   \n",
+      "\n",
+      "   loan_amount  status  activity_name  sector_name  ... sector_Entertainment  \\\n",
+      "0        125.0  funded  General Store       Retail  ...                False   \n",
+      "1        400.0  funded  Used Clothing     Clothing  ...                False   \n",
+      "2        400.0  funded  General Store       Retail  ...                False   \n",
+      "3        625.0  funded        Farming  Agriculture  ...                False   \n",
+      "4        425.0  funded        Farming  Agriculture  ...                False   \n",
+      "\n",
+      "  sector_Food sector_Health sector_Housing sector_Manufacturing  \\\n",
+      "0       False         False          False                False   \n",
+      "1       False         False          False                False   \n",
+      "2       False         False          False                False   \n",
+      "3       False         False          False                False   \n",
+      "4       False         False          False                False   \n",
+      "\n",
+      "  sector_Personal Use sector_Retail sector_Services  sector_Transportation  \\\n",
+      "0               False          True           False                  False   \n",
+      "1               False         False           False                  False   \n",
+      "2               False          True           False                  False   \n",
+      "3               False         False           False                  False   \n",
+      "4               False         False           False                  False   \n",
+      "\n",
+      "  sector_Wholesale  \n",
+      "0            False  \n",
+      "1            False  \n",
+      "2            False  \n",
+      "3            False  \n",
+      "4            False  \n",
+      "\n",
+      "[5 rows x 48 columns]\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Create sector fixed effects (one-hot encoding) and drop the first category\n",
+    "sector_dummies = pd.get_dummies(final_df['sector_name'], prefix='sector', drop_first=True)\n",
+    "\n",
+    "# Add sector dummies to the dataset\n",
+    "final_df = pd.concat([final_df, sector_dummies], axis=1)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 46,
+   "id": "bb94674b-8ccc-4ce0-b77b-e56bb550fca5",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Dataset saved to: /Users/jakubriha/Desktop/ECO225/Project/Data/data_df.csv\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Rename final_df to data_df\n",
+    "data_df = final_df.copy()\n",
+    "\n",
+    "# Define the directory path where you want to save the file\n",
+    "save_dir = \"/Users/jakubriha/Desktop/ECO225/Project/Data\"  # Ensure this directory exists\n",
+    "\n",
+    "# Ensure the directory exists\n",
+    "import os\n",
+    "if not os.path.exists(save_dir):\n",
+    "    os.makedirs(save_dir)  # Creates the directory if it does not exist\n",
+    "\n",
+    "# Save as CSV with a filename\n",
+    "save_path = os.path.join(save_dir, \"data_df.csv\")  # Append the filename\n",
+    "data_df.to_csv(save_path, index=False)\n",
+    "\n",
+    "print(f\"Dataset saved to: {save_path}\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "4d854fd1-e6ec-4bb3-9dfe-c87deb5af0d6",
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python [conda env:base] *",
+   "language": "python",
+   "name": "conda-base-py"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.7"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
